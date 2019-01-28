@@ -1,0 +1,697 @@
+---
+title: "Final project of Data Science Lab"
+subtitle: <i>di Beatrice Fumagalli, Matteo Porcino e Pierluigi Tagliabue</i>
+output: html_notebook
+---
+
+### <span style="color:DODGERBLUE"> Import libraries </span>
+```{r, warning=FALSE}
+library(dplyr)
+library(kableExtra)
+library(kohonen)
+library(corrplot)
+library(toaster)
+library(NbClust)
+library(Hmisc)
+```
+#------------------------------------------------------------------------------------------------------
+
+### <span style="color:DODGERBLUE"> Data Manipulation </span>
+
+#### Importing data and showing the structure of the dataset after removing the useless columns
+
+```{r,  warning=FALSE}
+db <- read.csv("D:\\Documents\\UNIMIB\\Secondo anno\\DS Lab\\DatasetClientClustering.csv", sep = ",", header = TRUE)
+db$Features <- NULL
+db$Descrizione <- NULL
+db$X <- NULL 
+db$X.1 <- NULL
+db$X.2 <- NULL
+db$X.3 <- NULL
+db$X.4 <- NULL
+db$X.5 <- NULL
+
+head((db)) 
+```
+#------------------------------------------------------------------------------------------------------
+
+```{r}
+str(db)
+```
+#------------------------------------------------------------------------------------------------------
+
+#### Assign string 'NA' (as in Napoli) to dataframe's row with Prov value as NA (recognised as NaN)
+
+```{r}
+db_na <- na.omit(db)
+```
+#------------------------------------------------------------------------------------------------------
+
+#### Set Prov variable as factor and then numeric
+
+```{r}
+db_na$Prov <- factor(db_na$Prov)
+db_na$Prov <- as.numeric(db_na$Prov)
+```
+#------------------------------------------------------------------------------------------------------
+
+#### Remove ClientID column
+
+```{r}
+db_na$ClientID <- NULL
+
+db_na$PanicMood <- as.numeric(db_na$PanicMood)
+db_na$PanicMood[db_na$PanicMood == -1] <- 1
+#db_na$PanicMood <- as.factor(db_na$PanicMood)
+#db_na$NoTrustInBanks=as.factor(db_na$NoTrustInBanks)
+```
+#------------------------------------------------------------------------------------------------------
+
+#### Attributes have different units of measure, so they need to be standardized
+
+```{r}
+data_scale <- as.data.frame(scale(db_na))
+head(data_scale)
+```
+#------------------------------------------------------------------------------------------------------
+
+# <span style="color:DODGERBLUE"> Matrice di correlazione </span>
+
+```{r}
+library(reshape2)
+library(ggplot2)
+cormat <- round(cor(data_scale), 2)
+melted_cormat <- melt(cormat)
+#ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + geom_tile()
+
+get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+}
+
+reorder_cormat <- function(cormat){
+# Use correlation between variables as distance
+dd <- as.dist((1-cormat)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+}
+
+cormat <- reorder_cormat(cormat)
+upper_tri <- get_upper_tri(cormat)
+# Melt the correlation matrix
+melted_cormat_up <- melt(upper_tri, na.rm = TRUE)
+# Create a ggheatmap
+ggheatmap <- ggplot(melted_cormat_up, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+    name="Pearson\nCorrelation") +
+  theme_minimal()+ # minimal theme
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 10, hjust = 1))+
+ coord_fixed()
+
+graph <- ggheatmap + 
+geom_text(aes(Var2, Var1, label = value), color = "black", size = 2) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  #panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+
+ggsave(graph, file="Corr_graph.svg")
+graph
+```
+#------------------------------------------------------------------------------------------------------
+
+# <span style="color:DODGERBLUE"> Cluster 1- Variabili correlate positivamente</span>
+
+```{r}
+var_corr_pos <- data_scale[, c(10, 11, 15)]
+```
+
+```{r}
+var_corr_pos 
+```
+
+```{r}
+library(cluster)
+library(dplyr)
+
+km.out <- list()
+sil.out <- list()
+x <- vector()
+y <- vector()
+minClust <- 2     
+maxClust <- 10
+
+
+
+for (centr in minClust:maxClust) {
+  i <- centr-(minClust-1) 
+  km.out[i] <- list(kmeans(var_corr_pos, centers = centr, nstart = 50,iter.max = 50))
+  sil.out[i] <- list(silhouette(km.out[[i]][[1]], dist(var_corr_pos)))
+  x[i] = centr  # value of k
+  y[i] = summary(sil.out[[i]])[[4]]  # Silhouette average width
+}
+
+
+library(ggplot2)
+ggplot(data = data.frame(x, y), aes(x, y)) + 
+  geom_point(size=3) + 
+  geom_line() +
+  xlab("Number of Cluster Centers") +
+  ylab("Silhouette Average Width") +
+  ggtitle("Silhouette Average Width as Cluster Center Varies")
+
+ks <- 2:10 # number of clusters we want to try
+ssw <- numeric(length(ks)) # vector for the ss_within
+for (i in seq_along(ks)) {
+  ssw[i] <- kmeans(var_corr_pos, ks[i],iter.max = 50)$tot.withinss
+}
+
+plot(x = ks, y = ssw, type = "l",
+     xlab = "Number of clusters",
+     ylab = "SS_within",
+     main = "Look for an elbow")
+plot(x = ks[-1],
+     y = - ssw[-1] + ssw[-length(ssw)], type = "h",
+     xlab = "Number of clusters",
+     ylab = "Decrement in SS_within",
+     main = "Look for a spike")
+```
+
+```{r}
+km.out.best <- km.out[[3]] 
+km.out.best
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+db_cluster_1 <- cbind(db_na, clusterNum = km.out.best$cluster)
+db_cluster_1[db_cluster_1$clusterNum == 1,]
+
+hist.data.frame(db_cluster_1[db_cluster_1$clusterNum == 1,])
+hist.data.frame(db_cluster_1[db_cluster_1$clusterNum == 2,])
+hist.data.frame(db_cluster_1[db_cluster_1$clusterNum == 3,])
+hist.data.frame(db_cluster_1[db_cluster_1$clusterNum == 4,])
+
+
+cluster_1_centr <- t(km.out.best$centers)
+colnames(cluster_1_centr) <- make.names(colnames(cluster_1_centr))
+cluster_1_centr
+
+pca <- prcomp(var_corr_pos, scale. = T, center = T)
+summary(pca)
+
+library(ggfortify)
+pca.fortify <- fortify(pca)
+
+pca3.dat <- cbind(pca.fortify, group=km.out.best$cluster)
+
+library(ggplot2)
+gg2 <- ggplot(pca3.dat) +
+  geom_point(aes(x=PC1, y=PC2, col=factor(group), text=rownames(pca3.dat)), size=2) +
+  labs(title = "Visualizing K-Means Clusters Against First Two Principal Components") +
+  scale_color_brewer(name="", palette = "Set1")
+
+plot(gg2)
+  
+theta <- seq(0,2*pi,length.out = 100)
+circle <- data.frame(x = cos(theta), y = sin(theta))
+p <- ggplot(circle,aes(x,y)) + geom_path()
+
+loadings <- data.frame(pca$rotation, 
+                       .names = row.names(pca$rotation))
+p + geom_text(data=loadings, 
+              mapping=aes(x = PC1, y = PC2, label = .names, colour = .names)) +
+  coord_fixed(ratio=1) +
+  labs(x = "PC1", y = "PC2", cex=10)
+
+
+```
+
+#------------------------------------------------------------------------------------------------------
+
+# <span style="color:DODGERBLUE"> Cluster 1- Variabili correlate negativamente</span>
+
+```{r}
+var_corr_neg <- data_scale[, c(10,1, 14)]
+```
+
+
+```{r}
+var_corr_neg 
+```
+
+
+```{r}
+library(cluster)
+library(dplyr)
+
+km.out <- list()
+sil.out <- list()
+x <- vector()
+y <- vector()
+minClust <- 2     
+maxClust <- 10
+
+
+
+for (centr in minClust:maxClust) {
+  i <- centr-(minClust-1) 
+  km.out[i] <- list(kmeans(var_corr_neg, centers = centr, nstart = 50,iter.max = 50))
+  sil.out[i] <- list(silhouette(km.out[[i]][[1]], dist(var_corr_neg)))
+  x[i] = centr  # value of k
+  y[i] = summary(sil.out[[i]])[[4]]  # Silhouette average width
+}
+
+
+library(ggplot2)
+ggplot(data = data.frame(x, y), aes(x, y)) + 
+  geom_point(size=3) + 
+  geom_line() +
+  xlab("Number of Cluster Centers") +
+  ylab("Silhouette Average Width") +
+  ggtitle("Silhouette Average Width as Cluster Center Varies")
+
+ks <- 2:10 # number of clusters we want to try
+ssw <- numeric(length(ks)) # vector for the ss_within
+for (i in seq_along(ks)) {
+  ssw[i] <- kmeans(var_corr_neg, ks[i],iter.max = 50)$tot.withinss
+}
+
+plot(x = ks, y = ssw, type = "l",
+     xlab = "Number of clusters",
+     ylab = "SS_within",
+     main = "Look for an elbow")
+plot(x = ks[-1],
+     y = - ssw[-1] + ssw[-length(ssw)], type = "h",
+     xlab = "Number of clusters",
+     ylab = "Decrement in SS_within",
+     main = "Look for a spike")
+```
+
+```{r}
+km.out.best <- km.out[[2]] 
+km.out.best
+```
+
+
+```{r}
+
+db_cluster_2 <- cbind(db_na, clusterNum = km.out.best$cluster)
+db_cluster_2[db_cluster_2$clusterNum == 1,]
+
+hist.data.frame(db_cluster_2[db_cluster_2$clusterNum == 1,])
+hist.data.frame(db_cluster_2[db_cluster_2$clusterNum == 2,])
+hist.data.frame(db_cluster_2[db_cluster_2$clusterNum == 3,])
+
+
+cluster_2_centr <- t(km.out.best$centers)
+colnames(cluster_2_centr) <- make.names(colnames(cluster_2_centr))
+cluster_2_centr
+
+pca <- prcomp(var_corr_neg, scale. = T, center = T)
+summary(pca)
+
+library(ggfortify)
+pca.fortify <- fortify(pca)
+
+pca3.dat <- cbind(pca.fortify, group=km.out.best$cluster)
+
+library(ggplot2)
+gg2 <- ggplot(pca3.dat) +
+  geom_point(aes(x=PC1, y=PC2, col=factor(group), text=rownames(pca3.dat)), size=2) +
+  labs(title = "Visualizing K-Means Clusters Against First Two Principal Components") +
+  scale_color_brewer(name="", palette = "Set1")
+
+plot(gg2)
+  
+theta <- seq(0,2*pi,length.out = 100)
+circle <- data.frame(x = cos(theta), y = sin(theta))
+p <- ggplot(circle,aes(x,y)) + geom_path()
+
+loadings <- data.frame(pca$rotation, 
+                       .names = row.names(pca$rotation))
+p + geom_text(data=loadings, 
+              mapping=aes(x = PC1, y = PC2, label = .names, colour = .names)) +
+  coord_fixed(ratio=1) +
+  labs(x = "PC1", y = "PC2", cex=10)
+
+
+```
+#------------------------------------------------------------------------------------------------------
+
+# <span style="color:DODGERBLUE"> Cluster 2- Variabili bisogni personali</span>
+
+```{r}
+var_pers <- data_scale[, c(11,12,13,14)]
+```
+
+```{r}
+var_pers 
+```
+
+```{r}
+library(cluster)
+library(dplyr)
+
+km.out <- list()
+sil.out <- list()
+x <- vector()
+y <- vector()
+minClust <- 2     
+maxClust <- 10
+
+
+
+for (centr in minClust:maxClust) {
+  i <- centr-(minClust-1) 
+  km.out[i] <- list(kmeans(var_pers, centers = centr, nstart = 50,iter.max = 50))
+  sil.out[i] <- list(silhouette(km.out[[i]][[1]], dist(var_pers)))
+  x[i] = centr  # value of k
+  y[i] = summary(sil.out[[i]])[[4]]  # Silhouette average width
+}
+
+
+library(ggplot2)
+ggplot(data = data.frame(x, y), aes(x, y)) + 
+  geom_point(size=3) + 
+  geom_line() +
+  xlab("Number of Cluster Centers") +
+  ylab("Silhouette Average Width") +
+  ggtitle("Silhouette Average Width as Cluster Center Varies")
+
+ks <- 2:10 # number of clusters we want to try
+ssw <- numeric(length(ks)) # vector for the ss_within
+for (i in seq_along(ks)) {
+  ssw[i] <- kmeans(var_pers, ks[i],iter.max = 50)$tot.withinss
+}
+
+plot(x = ks, y = ssw, type = "l",
+     xlab = "Number of clusters",
+     ylab = "SS_within",
+     main = "Look for an elbow")
+plot(x = ks[-1],
+     y = - ssw[-1] + ssw[-length(ssw)], type = "h",
+     xlab = "Number of clusters",
+     ylab = "Decrement in SS_within",
+     main = "Look for a spike")
+```
+
+
+```{r}
+km.out.best <- km.out[[2]] 
+km.out.best
+```
+
+```{r}
+
+db_cluster_3 <- cbind(db_na, clusterNum = km.out.best$cluster)
+db_cluster_3[db_cluster_3$clusterNum == 1,]
+
+hist.data.frame(db_cluster_3[db_cluster_3$clusterNum == 1,])
+hist.data.frame(db_cluster_3[db_cluster_3$clusterNum == 2,])
+hist.data.frame(db_cluster_3[db_cluster_3$clusterNum == 3,])
+#£hist.data.frame(db_cluster_3[db_cluster_3$clusterNum == 4,])
+
+
+cluster_3_centr <- t(km.out.best$centers)
+colnames(cluster_3_centr) <- make.names(colnames(cluster_3_centr))
+cluster_3_centr
+
+pca <- prcomp(var_pers, scale. = T, center = T)
+summary(pca)
+
+library(ggfortify)
+pca.fortify <- fortify(pca)
+
+pca3.dat <- cbind(pca.fortify, group=km.out.best$cluster)
+
+library(ggplot2)
+gg2 <- ggplot(pca3.dat) +
+  geom_point(aes(x=PC1, y=PC2, col=factor(group), text=rownames(pca3.dat)), size=2) +
+  labs(title = "Visualizing K-Means Clusters Against First Two Principal Components") +
+  scale_color_brewer(name="", palette = "Set1")
+
+plot(gg2)
+  
+theta <- seq(0,2*pi,length.out = 100)
+circle <- data.frame(x = cos(theta), y = sin(theta))
+p <- ggplot(circle,aes(x,y)) + geom_path()
+
+loadings <- data.frame(pca$rotation, 
+                       .names = row.names(pca$rotation))
+p + geom_text(data=loadings, 
+              mapping=aes(x = PC1, y = PC2, label = .names, colour = .names)) +
+  coord_fixed(ratio=1) +
+  labs(x = "PC1", y = "PC2", cex=10)
+
+
+```
+
+#------------------------------------------------------------------------------------------------------
+
+# <span style="color:DODGERBLUE"> Cluster 3 - Variabili caratteristiche cliente</span>
+
+```{r}
+var_cliente <- data_scale[,c(1,5,6,9)] #1 5 6 9 10
+```
+
+```{r}
+var_cliente 
+```
+
+```{r}
+set.seed(123)
+library(cluster)
+library(dplyr)
+
+km.out <- list()
+sil.out <- list()
+x <- vector()
+y <- vector()
+minClust <- 2     
+maxClust <- 10
+
+
+
+for (centr in minClust:maxClust) {
+  i <- centr-(minClust-1) 
+  km.out[i] <- list(kmeans(var_cliente, centers = centr, nstart = 50,iter.max = 50))
+  sil.out[i] <- list(silhouette(km.out[[i]][[1]], dist(var_cliente)))
+  x[i] = centr  # value of k
+  y[i] = summary(sil.out[[i]])[[4]]  # Silhouette average width
+}
+
+
+library(ggplot2)
+ggplot(data = data.frame(x, y), aes(x, y)) + 
+  geom_point(size=3) + 
+  geom_line() +
+  xlab("Number of Cluster Centers") +
+  ylab("Silhouette Average Width") +
+  ggtitle("Silhouette Average Width as Cluster Center Varies")
+
+ks <- 2:10 # number of clusters we want to try
+ssw <- numeric(length(ks)) # vector for the ss_within
+for (i in seq_along(ks)) {
+  ssw[i] <- kmeans(var_cliente, ks[i],iter.max = 50)$tot.withinss
+}
+
+plot(x = ks, y = ssw, type = "l",
+     xlab = "Number of clusters",
+     ylab = "SS_within",
+     main = "Look for an elbow")
+plot(x = ks[-1],
+     y = - ssw[-1] + ssw[-length(ssw)], type = "h",
+     xlab = "Number of clusters",
+     ylab = "Decrement in SS_within",
+     main = "Look for a spike")
+```
+
+
+```{r}
+km.out.best <- km.out[[3]] 
+km.out.best
+```
+
+```{r}
+
+db_cluster_4 <- cbind(db_na, clusterNum = km.out.best$cluster)
+db_cluster_4[db_cluster_4$clusterNum == 1,]
+
+hist.data.frame(db_cluster_4[db_cluster_4$clusterNum == 1,])
+hist.data.frame(db_cluster_4[db_cluster_4$clusterNum == 2,])
+hist.data.frame(db_cluster_4[db_cluster_4$clusterNum == 3,])
+hist.data.frame(db_cluster_4[db_cluster_4$clusterNum == 4,])
+
+
+cluster_4_centr <- t(km.out.best$centers)
+colnames(cluster_4_centr) <- make.names(colnames(cluster_4_centr))
+cluster_4_centr
+
+pca <- prcomp(var_cliente, scale. = T, center = T)
+summary(pca)
+
+library(ggfortify)
+pca.fortify <- fortify(pca)
+
+pca3.dat <- cbind(pca.fortify, group=km.out.best$cluster)
+
+library(ggplot2)
+gg2 <- ggplot(pca3.dat) +
+  geom_point(aes(x=PC1, y=PC2, col=factor(group), text=rownames(pca3.dat)), size=2) +
+  labs(title = "Visualizing K-Means Clusters Against First Two Principal Components") +
+  scale_color_brewer(name="", palette = "Set1")
+
+plot(gg2)
+  
+theta <- seq(0,2*pi,length.out = 100)
+circle <- data.frame(x = cos(theta), y = sin(theta))
+p <- ggplot(circle,aes(x,y)) + geom_path()
+
+loadings <- data.frame(pca$rotation, 
+                       .names = row.names(pca$rotation))
+p + geom_text(data=loadings, 
+              mapping=aes(x = PC1, y = PC2, label = .names, colour = .names)) +
+  coord_fixed(ratio=1) +
+  labs(x = "PC1", y = "PC2", cex=10)
+
+
+```
+
+#------------------------------------------------------------------------------------------------------
+
+# <span style="color:DODGERBLUE"> Cluster 5 - Variabili composizione portafogli</span>
+
+```{r}
+var_port <- data_scale[,c(20,21,22,23,24)] 
+```
+
+```{r}
+var_port 
+```
+
+```{r}
+set.seed(123)
+library(cluster)
+library(dplyr)
+
+km.out <- list()
+sil.out <- list()
+x <- vector()
+y <- vector()
+minClust <- 2     
+maxClust <- 10
+
+
+
+for (centr in minClust:maxClust) {
+  i <- centr-(minClust-1) 
+  km.out[i] <- list(kmeans(var_port, centers = centr, nstart = 50,iter.max = 50))
+  sil.out[i] <- list(silhouette(km.out[[i]][[1]], dist(var_port)))
+  x[i] = centr  # value of k
+  y[i] = summary(sil.out[[i]])[[4]]  # Silhouette average width
+}
+
+
+library(ggplot2)
+ggplot(data = data.frame(x, y), aes(x, y)) + 
+  geom_point(size=3) + 
+  geom_line() +
+  xlab("Number of Cluster Centers") +
+  ylab("Silhouette Average Width") +
+  ggtitle("Silhouette Average Width as Cluster Center Varies")
+
+ks <- 2:10 # number of clusters we want to try
+ssw <- numeric(length(ks)) # vector for the ss_within
+for (i in seq_along(ks)) {
+  ssw[i] <- kmeans(var_port, ks[i],iter.max = 50)$tot.withinss
+}
+
+plot(x = ks, y = ssw, type = "l",
+     xlab = "Number of clusters",
+     ylab = "SS_within",
+     main = "Look for an elbow")
+plot(x = ks[-1],
+     y = - ssw[-1] + ssw[-length(ssw)], type = "h",
+     xlab = "Number of clusters",
+     ylab = "Decrement in SS_within",
+     main = "Look for a spike")
+```
+
+
+```{r}
+km.out.best <- km.out[[3]] 
+km.out.best
+```
+
+```{r}
+
+db_cluster_5 <- cbind(db_na, clusterNum = km.out.best$cluster)
+db_cluster_5[db_cluster_5$clusterNum == 1,]
+
+hist.data.frame(db_cluster_5[db_cluster_5$clusterNum == 1,])
+hist.data.frame(db_cluster_5[db_cluster_5$clusterNum == 2,])
+hist.data.frame(db_cluster_5[db_cluster_5$clusterNum == 3,])
+hist.data.frame(db_cluster_5[db_cluster_5$clusterNum == 4,])
+
+
+cluster_5_centr <- t(km.out.best$centers)
+colnames(cluster_5_centr) <- make.names(colnames(cluster_5_centr))
+cluster_5_centr
+
+pca <- prcomp(var_port, scale. = T, center = T)
+summary(pca)
+
+library(ggfortify)
+pca.fortify <- fortify(pca)
+
+pca3.dat <- cbind(pca.fortify, group=km.out.best$cluster)
+
+library(ggplot2)
+gg2 <- ggplot(pca3.dat) +
+  geom_point(aes(x=PC1, y=PC2, col=factor(group), text=rownames(pca3.dat)), size=2) +
+  labs(title = "Visualizing K-Means Clusters Against First Two Principal Components") +
+  scale_color_brewer(name="", palette = "Set1")
+
+plot(gg2)
+  
+theta <- seq(0,2*pi,length.out = 100)
+circle <- data.frame(x = cos(theta), y = sin(theta))
+p <- ggplot(circle,aes(x,y)) + geom_path()
+
+loadings <- data.frame(pca$rotation, 
+                       .names = row.names(pca$rotation))
+p + geom_text(data=loadings, 
+              mapping=aes(x = PC1, y = PC2, label = .names, colour = .names)) +
+  coord_fixed(ratio=1) +
+  labs(x = "PC1", y = "PC2", cex=10)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
